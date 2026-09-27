@@ -1,0 +1,339 @@
+esphome:
+  name: cyd-7
+  friendly_name: CYD-7
+  # restore_value on the orientation select restores its stored option
+  # before LVGL has finished building pages, so the rotation lands but
+  # lvgl.page.show silently no-ops. Re-apply explicitly once everything
+  # (including lvgl) has actually finished setup(). priority: -100 forces
+  # this to run after ALL other components' setup() (select, lvgl, etc.),
+  # since the default on_boot priority (600) ties with those components
+  # and this trigger was firing before they were ready.
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: apply_display_orientation
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret cyd_7__encryption_key
+ota:
+  - platform: esphome
+    password: !secret cyd_7__ota_password
+    allow_partition_access: true
+
+wifi:
+  ssid: !secret wifi_ssid_2
+  password: !secret wifi_password_2
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Cyd-7 Fallback Hotspot"
+    password: "yktF1G1PHE14"
+
+captive_portal:
+
+    
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+output:
+  - platform: ledc
+    pin: GPIO21
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: Display Backlight
+    id: backlight
+    restore_mode: ALWAYS_ON
+
+# --- Orientation, confirmed working (rotation + touch) on this hardware.
+# Landscape orientations show main_page (unchanged); portrait orientations
+# show portrait_page, a layout built for the narrower 240px width: "1" on
+# top, "0" below it, a narrower slider at the bottom.
+select:
+  - platform: template
+    name: "Display Orientation"
+    id: display_orientation
+    icon: mdi:screen-rotation
+    optimistic: true
+    restore_value: true
+    initial_option: "USB Right"
+    options:
+      - "USB Down"
+      - "USB Right"
+      - "USB Up"
+      - "USB Left"
+    on_value:
+      then:
+        - script.execute: apply_display_orientation
+
+# --- Applies the current orientation select's value to the actual
+# display (rotation + which page is shown). Called both from the select's
+# on_value (interactive changes) and from esphome.on_boot above (so a
+# restore_value-restored option is correctly re-applied once lvgl is
+# fully ready, instead of relying on restore's own on_value timing).
+script:
+  - id: apply_display_orientation
+    then:
+      - if:
+          condition:
+            lambda: 'return std::string(id(display_orientation).current_option()) == "USB Down";'
+          then:
+            - lvgl.display.set_rotation: 0
+            - lvgl.page.show: portrait_page
+      - if:
+          condition:
+            lambda: 'return std::string(id(display_orientation).current_option()) == "USB Right";'
+          then:
+            - lvgl.display.set_rotation: 90
+            - lvgl.page.show: main_page
+      - if:
+          condition:
+            lambda: 'return std::string(id(display_orientation).current_option()) == "USB Up";'
+          then:
+            - lvgl.display.set_rotation: 180
+            - lvgl.page.show: portrait_page
+      - if:
+          condition:
+            lambda: 'return std::string(id(display_orientation).current_option()) == "USB Left";'
+          then:
+            - lvgl.display.set_rotation: 270
+            - lvgl.page.show: main_page
+
+spi:
+  - id: tft
+    clk_pin: GPIO14
+    mosi_pin: GPIO13
+    miso_pin: GPIO12
+  - id: touch_spi
+    clk_pin: GPIO25
+    mosi_pin: GPIO32
+    miso_pin: GPIO39
+
+
+touchscreen:
+  platform: xpt2046
+  id: touch
+  spi_id: touch_spi
+  cs_pin: GPIO33
+  interrupt_pin: GPIO36
+  update_interval: 50ms
+  calibration:
+    x_min: 202
+    x_max: 3813
+    y_min: 311
+    y_max: 3800
+  transform:
+    swap_xy: false
+    mirror_x: true
+    mirror_y: false
+  threshold: 400
+    
+display:
+  - platform: mipi_spi
+    model: ESP32-2432S028
+    spi_id: tft
+    invert_colors: false
+    color_order: BGR
+   # show_test_card: true
+    
+lvgl:
+  rotation: 90
+  pages:
+    - id: main_page
+      widgets:
+        - button:
+            id: btn_on
+            x: 20
+            y: 20
+            width: 130
+            height: 100
+            widgets:
+              - label:
+                  text: "1"
+                  text_font: montserrat_48
+                  align: CENTER
+            on_press:
+              - homeassistant.action:
+                  action: light.turn_on
+                  data:
+                    entity_id: light.little_red_desk_lamp
+        - button:
+            id: btn_off
+            x: 170
+            y: 20
+            width: 130
+            height: 100
+            widgets:
+              - label:
+                  text: "0"
+                  text_font: montserrat_48
+                  align: CENTER
+            on_press:
+              - homeassistant.action:
+                  action: light.turn_off
+                  data:
+                    entity_id: light.little_red_desk_lamp
+        - obj:
+            id: underline_on
+            x: 20
+            y: 190
+            width: 130
+            height: 3
+            bg_color: 0x00FF00
+            hidden: true
+        - obj:
+            id: underline_off
+            x: 170
+            y: 190
+            width: 130
+            height: 3
+            bg_color: 0x00FF00
+            hidden: true
+        - slider:
+            id: brightness_slider
+            x: 20
+            y: 210
+            width: 280
+            height: 20
+            min_value: 0
+            max_value: 100
+            value: 50
+            on_release:
+              - homeassistant.action:
+                  action: light.turn_on
+                  data:
+                    entity_id: light.little_red_desk_lamp
+                    brightness_pct: !lambda 'return to_string((int)x);'
+
+    - id: portrait_page
+      widgets:
+        - button:
+            id: btn_on_portrait
+            x: 20
+            y: 20
+            width: 200
+            height: 100
+            widgets:
+              - label:
+                  text: "1"
+                  text_font: montserrat_48
+                  align: CENTER
+            on_press:
+              - homeassistant.action:
+                  action: light.turn_on
+                  data:
+                    entity_id: light.little_red_desk_lamp
+        - obj:
+            id: underline_on_portrait
+            x: 20
+            y: 125
+            width: 200
+            height: 3
+            bg_color: 0x00FF00
+            hidden: true
+        - button:
+            id: btn_off_portrait
+            x: 20
+            y: 145
+            width: 200
+            height: 100
+            widgets:
+              - label:
+                  text: "0"
+                  text_font: montserrat_48
+                  align: CENTER
+            on_press:
+              - homeassistant.action:
+                  action: light.turn_off
+                  data:
+                    entity_id: light.little_red_desk_lamp
+        - obj:
+            id: underline_off_portrait
+            x: 20
+            y: 250
+            width: 200
+            height: 3
+            bg_color: 0x00FF00
+            hidden: true
+        - slider:
+            id: brightness_slider_portrait
+            x: 20
+            y: 285
+            width: 200
+            height: 20
+            min_value: 0
+            max_value: 100
+            value: 50
+            on_release:
+              - homeassistant.action:
+                  action: light.turn_on
+                  data:
+                    entity_id: light.little_red_desk_lamp
+                    brightness_pct: !lambda 'return to_string((int)x);'
+
+binary_sensor:
+  - platform: homeassistant
+    id: desk_lamp_state
+    entity_id: light.little_red_desk_lamp
+    on_state:
+      - if:
+          condition:
+            binary_sensor.is_on: desk_lamp_state
+          then:
+            - lvgl.widget.update:
+                id: underline_on
+                hidden: false
+            - lvgl.widget.update:
+                id: underline_off
+                hidden: true
+            - lvgl.widget.update:
+                id: underline_on_portrait
+                hidden: false
+            - lvgl.widget.update:
+                id: underline_off_portrait
+                hidden: true
+          else:
+            - lvgl.widget.update:
+                id: underline_on
+                hidden: true
+            - lvgl.widget.update:
+                id: underline_off
+                hidden: false
+            - lvgl.slider.update:
+                id: brightness_slider
+                value: 0
+            - lvgl.widget.update:
+                id: underline_on_portrait
+                hidden: true
+            - lvgl.widget.update:
+                id: underline_off_portrait
+                hidden: false
+            - lvgl.slider.update:
+                id: brightness_slider_portrait
+                value: 0
+
+sensor:
+  - platform: homeassistant
+    id: lamp_brightness
+    entity_id: light.little_red_desk_lamp
+    attribute: brightness
+    on_value:
+      - if:
+          condition:
+            lambda: 'return !isnan(x);'
+          then:
+            - lvgl.slider.update:
+                id: brightness_slider
+                value: !lambda "return (int)(x / 255.0 * 100);"
+            - lvgl.slider.update:
+                id: brightness_slider_portrait
+                value: !lambda "return (int)(x / 255.0 * 100);"
